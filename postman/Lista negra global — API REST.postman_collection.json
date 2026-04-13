@@ -1,0 +1,460 @@
+{
+  "info": {
+    "_postman_id": "7ff98179-0fc4-4fd5-9fd3-139137d25cac",
+    "name": "Lista negra global — API REST",
+    "description": "# Microservicio lista negra global\n\nAPI Flask para agregar y consultar emails en la lista negra de la organización. Persistencia en PostgreSQL (o SQLite en desarrollo).\n\n## Autenticación\n\nLos endpoints bajo `/blacklists` requieren **Bearer Token** (JWT HS256). El secreto debe coincidir con la variable de entorno `JWT_SECRET_KEY` del servidor.\n\n**Generar un token de prueba**\n1. Abre [jwt.io](https://jwt.io): algoritmo **HS256**, pega el mismo valor de `JWT_SECRET_KEY` en \"your-256-bit-secret\".\n2. Payload mínimo de ejemplo (ajusta `exp` a una fecha futura, p. ej. año 2035):\n```json\n{\n  \"sub\": \"postman\",\n  \"iat\": 1700000000,\n  \"exp\": 2051222400\n}\n```\n3. Copia el token generado en la variable de entorno **`jwt_token`**.\n\nO desde la raíz del repositorio (Python 3.11 y venv activado), con `JWT_SECRET_KEY` en `.env` o en el entorno:\n```text\npy -3.11 scripts/issue_jwt_token.py\n```\nCopia la salida a **`jwt_token`**.\n\n## Variables de colección / entorno\n\n| Variable | Uso |\n|----------|-----|\n| `base_url` | URL base (ej. `http://127.0.0.1:5000` o URL de Elastic Beanstalk) |\n| `jwt_token` | JWT para Authorization Bearer |\n| `lookup_email` | Email a consultar en GET (ej. `user@example.com`) |\n\n## Errores habituales\n\n- **401**: falta header `Authorization: Bearer ...` o JWT inválido/expirado.\n- **400**: cuerpo JSON inválido o errores de validación Marshmallow (`email`, `app_uuid` UUID, `blocked_reason` máx. 255 caracteres).\n- **500**: error al guardar en base de datos.\n\n## Publicar documentación en Postman\n\n1. Importa esta colección y el entorno `.postman_environment.json`.\n2. En Postman: colección → **View complete documentation** o **Publish** (según tu plan) y comparte el enlace para el informe de la entrega.\n",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "43546296"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Estado es 200 OK\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"El servicio está saludable\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.status).to.eql(\"ok\");",
+                  "});",
+                  "",
+                  "pm.test(\"Tiempo de respuesta es menor a 500ms\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(500);",
+                  "});"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "Comprobación de disponibilidad para balanceadores y **AWS Elastic Beanstalk** (configurar ruta `/health` en el health check). No requiere JWT."
+          },
+          "response": []
+        }
+      ],
+      "description": "Endpoints sin autenticación."
+    },
+    {
+      "name": "Blacklists",
+      "item": [
+        {
+          "name": "Agregar email en lista negra",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Estado es 201 Created\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test(\"Respuesta exitosa y email correcto\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.success).to.eql(true);",
+                  "    pm.expect(jsonData.email).to.eql(pm.request.body.raw ? JSON.parse(pm.request.body.raw).email : \"\");",
+                  "});"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"app_uuid\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"blocked_reason\": \"Solicitud del área legal — caso 2025-042\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/blacklists",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "blacklists"
+              ]
+            },
+            "description": "Registra un email en la lista negra global o **actualiza** la entrada si el email ya existe.\n\n### Cuerpo (JSON)\n\n| Campo | Tipo | Obligatorio | Descripción |\n|-------|------|-------------|-------------|\n| `email` | string (email) | Sí | Email del cliente |\n| `app_uuid` | string (UUID) | Sí | Identificador de la aplicación cliente |\n| `blocked_reason` | string | No | Motivo; máximo 255 caracteres. Si el email ya existe y **no** envías esta clave en el JSON, se conserva el motivo anterior. |\n\nEl servidor guarda la **IP del cliente** (`X-Forwarded-For` si existe) y la **fecha/hora** (creación o actualización).\n\n### Respuestas\n\n- **201**: email creado en la lista.\n- **200**: email ya existía; entrada actualizada.\n- **400**: validación fallida.\n- **401**: sin token o token inválido.\n- **500**: error al persistir."
+          },
+          "response": []
+        },
+        {
+          "name": "Actualizar email en lista negra Copy",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Estado es 200 OK (Update)\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Mensaje de actualización correcto\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.message).to.contains(\"updated\");",
+                  "});"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"app_uuid\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"blocked_reason\": \"updated reason\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/blacklists",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "blacklists"
+              ]
+            },
+            "description": "Registra un email en la lista negra global o **actualiza** la entrada si el email ya existe.\n\n### Cuerpo (JSON)\n\n| Campo | Tipo | Obligatorio | Descripción |\n|-------|------|-------------|-------------|\n| `email` | string (email) | Sí | Email del cliente |\n| `app_uuid` | string (UUID) | Sí | Identificador de la aplicación cliente |\n| `blocked_reason` | string | No | Motivo; máximo 255 caracteres. Si el email ya existe y **no** envías esta clave en el JSON, se conserva el motivo anterior. |\n\nEl servidor guarda la **IP del cliente** (`X-Forwarded-For` si existe) y la **fecha/hora** (creación o actualización).\n\n### Respuestas\n\n- **201**: email creado en la lista.\n- **200**: email ya existía; entrada actualizada.\n- **400**: validación fallida.\n- **401**: sin token o token inválido.\n- **500**: error al persistir."
+          },
+          "response": []
+        },
+        {
+          "name": "Correo Invalido",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Estado es 400 Bad Request\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test(\"Retorna errores de validación\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property(\"errors\");",
+                  "});"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"correo-invalido\",\n  \"app_uuid\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"blocked_reason\": \"updated reason\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/blacklists",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "blacklists"
+              ]
+            },
+            "description": "Registra un email en la lista negra global o **actualiza** la entrada si el email ya existe.\n\n### Cuerpo (JSON)\n\n| Campo | Tipo | Obligatorio | Descripción |\n|-------|------|-------------|-------------|\n| `email` | string (email) | Sí | Email del cliente |\n| `app_uuid` | string (UUID) | Sí | Identificador de la aplicación cliente |\n| `blocked_reason` | string | No | Motivo; máximo 255 caracteres. Si el email ya existe y **no** envías esta clave en el JSON, se conserva el motivo anterior. |\n\nEl servidor guarda la **IP del cliente** (`X-Forwarded-For` si existe) y la **fecha/hora** (creación o actualización).\n\n### Respuestas\n\n- **201**: email creado en la lista.\n- **200**: email ya existía; entrada actualizada.\n- **400**: validación fallida.\n- **401**: sin token o token inválido.\n- **500**: error al persistir."
+          },
+          "response": []
+        },
+        {
+          "name": "Token Invalid",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  ""
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Estado es 400 Bad Request\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test(\"Detecta UUID inválido\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property(\"errors\");",
+                  "    pm.expect(jsonData.errors).to.have.property(\"app_uuid\");",
+                  "    pm.expect(jsonData.errors.app_uuid[0]).to.contain(\"Not a valid UUID\");",
+                  "});"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"cliente2@empresa.com\",\n  \"app_uuid\": \"777777-777777-777777\",\n  \"blocked_reason\": \"updated reason\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/blacklists",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "blacklists"
+              ]
+            },
+            "description": "Registra un email en la lista negra global o **actualiza** la entrada si el email ya existe.\n\n### Cuerpo (JSON)\n\n| Campo | Tipo | Obligatorio | Descripción |\n|-------|------|-------------|-------------|\n| `email` | string (email) | Sí | Email del cliente |\n| `app_uuid` | string (UUID) | Sí | Identificador de la aplicación cliente |\n| `blocked_reason` | string | No | Motivo; máximo 255 caracteres. Si el email ya existe y **no** envías esta clave en el JSON, se conserva el motivo anterior. |\n\nEl servidor guarda la **IP del cliente** (`X-Forwarded-For` si existe) y la **fecha/hora** (creación o actualización).\n\n### Respuestas\n\n- **201**: email creado en la lista.\n- **200**: email ya existía; entrada actualizada.\n- **400**: validación fallida.\n- **401**: sin token o token inválido.\n- **500**: error al persistir."
+          },
+          "response": []
+        },
+        {
+          "name": "Consultar email existente",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Estado es 200 OK\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"El email aparece como blacklisted\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.blacklisted).to.eql(true);",
+                  "    pm.expect(jsonData.blocked_reason).to.not.be.null;",
+                  "});"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/blacklists/{{email}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "blacklists",
+                "{{email}}"
+              ],
+              "query": [
+                {
+                  "key": "",
+                  "value": null,
+                  "type": "text",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Indica si el **email** (segmento de ruta) está en la lista negra global y devuelve el **motivo** registrado.\n\n### Respuesta (JSON)\n\n| Campo | Tipo | Descripción |\n|-------|------|-------------|\n| `blacklisted` | boolean | `true` si existe entrada |\n| `blocked_reason` | string o null | Motivo; `null` si no está en lista |\n\nSiempre responde **200** (no usa 404 cuando no está listado)."
+          },
+          "response": []
+        },
+        {
+          "name": "Consultar email no existente",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Estado es 200 OK\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"El email NO aparece como blacklisted\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.blacklisted).to.eql(false);",
+                  "    pm.expect(jsonData.blocked_reason).to.be.null;",
+                  "});"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/blacklists/fake@email.com",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "blacklists",
+                "fake@email.com"
+              ]
+            },
+            "description": "Indica si el **email** (segmento de ruta) está en la lista negra global y devuelve el **motivo** registrado.\n\n### Respuesta (JSON)\n\n| Campo | Tipo | Descripción |\n|-------|------|-------------|\n| `blacklisted` | boolean | `true` si existe entrada |\n| `blocked_reason` | string o null | Motivo; `null` si no está en lista |\n\nSiempre responde **200** (no usa 404 cuando no está listado)."
+          },
+          "response": []
+        }
+      ],
+      "description": "Operaciones sobre la lista negra. Requieren **Bearer JWT**.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{jwt_token}}",
+            "type": "string"
+          }
+        ]
+      }
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "packages": {},
+        "requests": {},
+        "exec": [
+          ""
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "packages": {},
+        "requests": {},
+        "exec": [
+          ""
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:5000"
+    },
+    {
+      "key": "jwt_token",
+      "value": ""
+    },
+    {
+      "key": "email",
+      "value": ""
+    }
+  ]
+}
