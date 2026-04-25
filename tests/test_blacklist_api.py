@@ -95,3 +95,31 @@ def test_get_blacklist_without_token_returns_401(client):
     response = client.get("/blacklists/unknown@empresa.com")
 
     assert response.status_code == 401
+
+
+def test_post_blacklist_without_json_body_returns_400(client, auth_header):
+    response = client.post(
+        "/blacklists",
+        data="plain text body",
+        headers={**auth_header, "Content-Type": "text/plain"},
+    )
+    data = response.get_json()
+
+    assert response.status_code == 400
+    assert data["errors"]["_schema"] == ["Invalid or missing JSON body"]
+
+
+def test_health_returns_ok(client):
+    response = client.get("/health")
+    data = response.get_json()
+
+    assert response.status_code == 200
+    assert data == {"status": "ok"}
+
+
+def test_health_explicit_fail(client):
+    response = client.get("/health")
+    data = response.get_json()
+
+    assert response.status_code == 500
+    assert data == {"status": "fail"}
